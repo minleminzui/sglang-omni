@@ -16,6 +16,7 @@ from sglang_omni.core.types import (
 from sglang_omni.pipeline.input_handler import DirectInput, InputHandler
 from sglang_omni.pipeline.worker import Worker
 from sglang_omni.relay import SHMRelay
+from sglang_omni.relay.ralay import Ralay
 from sglang_omni.transport.control_plane import StageControlPlane
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class Stage:
         abort_endpoint: str,
         endpoints: dict[str, str],
         input_handler: InputHandler | None = None,
+        relay: Ralay | None = None,
     ):
         """Initialize a stage.
 
@@ -57,6 +59,7 @@ class Stage:
             abort_endpoint: ZMQ endpoint for abort broadcasts
             endpoints: Dict of stage_name -> endpoint for routing
             input_handler: Input handler for aggregation (default: DirectInput)
+            relay: Relay implementation for data transfer (default: SHMRelay)
         """
         self.name = name
         self.get_next = get_next
@@ -64,7 +67,7 @@ class Stage:
         self.input_handler = input_handler or DirectInput()
 
         # Components
-        self.data_plane = SHMRelay()
+        self.data_plane = relay or SHMRelay()
         self.control_plane = StageControlPlane(
             stage_name=name,
             recv_endpoint=recv_endpoint,
@@ -197,20 +200,26 @@ class Stage:
             self.data_plane.cleanup(request_id)
             return
 
-        # Read data from SHM
-        result = self.data_plane.get_object(
-            request_id=request_id,
-            metadata=msg.shm_metadata,
-            from_stage=msg.from_stage,
-            to_stage=self.name,
-        )
-        if result is None:
+        # Read data using unified relay interface
+        try:
+            # Use empty descriptor list - SHMRelay will return data in the operation object
+            read_op = self.data_plane.get(metadata=msg.shm_metadata, descriptors=[])
+            read_op.wait_for_completion()
+
+            # Get data from the operation object
+            data = read_op.data
+
+            logger.debug(
+                "Stage %s received data from %s for req=%s",
+                self.name,
+                msg.from_stage,
+                request_id,
+            )
+        except Exception as e:
             logger.error(
-                "Stage %s failed to get data for req=%s", self.name, request_id
+                "Stage %s failed to get data for req=%s: %s", self.name, request_id, e
             )
             return
-
-        data, _ = result
 
         # Handle input aggregation
         merged = self.input_handler.receive(request_id, msg.from_stage, data)
