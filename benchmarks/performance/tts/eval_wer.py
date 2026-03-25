@@ -6,20 +6,20 @@ Supports both English (Whisper-large-v3) and Chinese (FunASR paraformer-zh).
 
 Usage:
     # English
-    CUDA_VISIBLE_DEVICES=7 python benchmarks/eval_wer.py \
-        --meta /tmp/seed-tts-eval/seedtts_testset/en/meta.lst \
+    python -m benchmarks.performance.tts.eval_wer \
+        --meta seedtts_testset/zh/hardcase.lst \
         --audio-dir results/s2pro_compile_eager/audio \
         --lang en
 
     # Chinese
-    CUDA_VISIBLE_DEVICES=7 python benchmarks/eval_wer.py \
-        --meta /tmp/seed-tts-eval/seedtts_testset/zh/meta.lst \
+    python -m benchmarks.performance.tts.eval_wer \
+        --meta seedtts_testset/zh/hardcase.lst \
         --audio-dir results/s2pro_zh/audio \
         --lang zh
 
     # Chinese hard cases
-    CUDA_VISIBLE_DEVICES=7 python benchmarks/eval_wer.py \
-        --meta /tmp/seed-tts-eval/seedtts_testset/zh/hardcase.lst \
+    python -m benchmarks.performance.tts.eval_wer \
+        --meta seedtts_testset/zh/hardcase.lst \
         --audio-dir results/s2pro_zh_hard/audio \
         --lang zh
 """
@@ -245,7 +245,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(
         description="WER evaluation (Whisper for EN, FunASR for ZH)"
     )
-    p.add_argument("--meta", default="/tmp/seed-tts-eval/seedtts_testset/en/meta.lst")
+    p.add_argument("--meta", default="seedtts_testset/en/meta.lst")
     p.add_argument(
         "--audio-dir", required=True, help="Directory with generated {id}.wav files"
     )
