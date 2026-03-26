@@ -12,7 +12,6 @@ import torch
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from torch import Tensor, nn
 
-from .runtime.s2pro_ar import _sample_with_topk
 from sglang_omni.vendor.sglang.core import ForwardBatch
 from sglang_omni.vendor.sglang.layers import (
     MergedColumnParallelLinear,
@@ -49,8 +48,11 @@ def _select_semantic_token_with_fallback(
         index=valid_counts.unsqueeze(-1),
     ).squeeze(-1)
     has_previous_token = previous_mask.any(dim=-1)
-    collapse_mask = fallback_mask & has_previous_token & (greedy_token == last_previous_token)
+    collapse_mask = (
+        fallback_mask & has_previous_token & (greedy_token == last_previous_token)
+    )
     return torch.where(collapse_mask, fallback_token, greedy_token)
+
 
 class S2ProAttention(nn.Module):
     def __init__(
