@@ -78,16 +78,14 @@ def _resolve_sampling_state(
     ras_temperature: float,
     ras_top_p: float,
     repetition_window: int = _REPETITION_WINDOW,
-) -> tuple[float, float, list[int]]:
+) -> tuple[bool, float, float, list[int]]:
     previous_tokens = data._previous_semantic_tokens[-repetition_window:]
     recent_tokens = data._previous_semantic_tokens[-ras_window:]
-    use_ras = False
-    if len(recent_tokens) >= 2 and len(set(recent_tokens[-4:])) < len(recent_tokens[-4:]):
-        use_ras = True
+    use_ras = len(recent_tokens) >= 3 and len(set(recent_tokens[-3:])) == 1
 
     if use_ras:
-        return ras_temperature, ras_top_p, previous_tokens
-    return data.temperature, data.top_p, previous_tokens
+        return True, ras_temperature, ras_top_p, previous_tokens
+    return False, data.temperature, data.top_p, previous_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -467,12 +465,13 @@ class S2ProSGLangModelRunner:
             data: S2ProSGLangRequestData = sched_req.data
             if data._last_codebook_values is not None and is_semantic[i]:
                 text_model._vq_codes[i].copy_(data._last_codebook_values)
-            temperature, top_p, previous_tokens = _resolve_sampling_state(
+            use_ras, temperature, top_p, previous_tokens = _resolve_sampling_state(
                 data,
                 ras_window=text_model._ras_window,
                 ras_temperature=text_model._ras_temperature,
                 ras_top_p=text_model._ras_top_p,
             )
+            text_model._sample_use_ras[i] = use_ras
             text_model._sample_temperature[i, 0] = temperature
             text_model._sample_top_p[i, 0] = top_p
             text_model._sample_repetition_penalty[i, 0] = data.repetition_penalty

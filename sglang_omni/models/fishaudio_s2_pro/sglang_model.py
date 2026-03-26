@@ -31,35 +31,26 @@ logger = logging.getLogger(__name__)
 _REPETITION_WINDOW = 16
 
 
-def _sample_semantic_with_history(
+def _select_semantic_token_with_fallback(
     logits: Tensor,
     *,
-    temperature: Tensor,
-    top_p: Tensor,
-    top_k: int,
-    repetition_penalty: Tensor,
+    fallback_mask: Tensor,
     previous_tokens: Tensor,
     previous_mask: Tensor,
 ) -> Tensor:
-    if previous_tokens.numel() > 0:
-        previous_tokens = previous_tokens.long()
-        previous_scores = torch.gather(logits, dim=-1, index=previous_tokens)
-        adjusted_scores = torch.where(
-            previous_scores < 0,
-            previous_scores * repetition_penalty,
-            previous_scores / repetition_penalty,
-        )
-        scatter_scores = torch.where(previous_mask, adjusted_scores, previous_scores)
-        logits = logits.clone()
-        logits.scatter_(dim=-1, index=previous_tokens, src=scatter_scores.to(logits.dtype))
+    top2_tokens = torch.topk(logits, k=2, dim=-1).indices
+    greedy_token = top2_tokens[:, 0]
+    fallback_token = top2_tokens[:, 1]
 
-    return _sample_with_topk(
-        logits,
-        temperature,
-        top_p,
-        top_k=top_k,
+    valid_counts = previous_mask.long().sum(dim=-1).clamp(min=1) - 1
+    last_previous_token = torch.gather(
+        previous_tokens.long(),
+        dim=1,
+        index=valid_counts.unsqueeze(-1),
     ).squeeze(-1)
-
+    has_previous_token = previous_mask.any(dim=-1)
+    collapse_mask = fallback_mask & has_previous_token & (greedy_token == last_previous_token)
+    return torch.where(collapse_mask, fallback_token, greedy_token)
 
 class S2ProAttention(nn.Module):
     def __init__(
@@ -310,6 +301,11 @@ class S2ProSGLangTextModel(nn.Module):
         self._sample_temperature = torch.full(
             (max_batch_size, 1), 0.8, dtype=torch.float32, device=device
         )
+        self._sample_use_ras = torch.zeros(
+            max_batch_size,
+            dtype=torch.bool,
+            device=device,
+        )
         self._sample_top_p = torch.full(
             (max_batch_size, 1), 0.8, dtype=torch.float32, device=device
         )
@@ -417,12 +413,9 @@ class S2ProSGLangTextModel(nn.Module):
 
         # Constrained decode: mask non-semantic tokens
         biased_logits = logits + self._semantic_bias.to(dtype=logits.dtype)
-        semantic_token = _sample_semantic_with_history(
+        semantic_token = _select_semantic_token_with_fallback(
             biased_logits,
-            temperature=self._sample_temperature[:bs],
-            top_p=self._sample_top_p[:bs],
-            top_k=self._top_k,
-            repetition_penalty=self._sample_repetition_penalty[:bs],
+            fallback_mask=self._sample_use_ras[:bs],
             previous_tokens=self._sample_previous_tokens[:bs],
             previous_mask=self._sample_previous_mask[:bs],
         )
@@ -444,12 +437,7 @@ class S2ProSGLangTextModel(nn.Module):
                 cb_hidden, codebook_idx=cb_idx
             )
             cb_logits = cb_logits[:, 0, : self._codebook_size]
-            cb_token = _sample_with_topk(
-                cb_logits,
-                self._sample_temperature[:bs],
-                self._sample_top_p[:bs],
-                top_k=self._top_k,
-            ).squeeze(-1)
+            cb_token = torch.argmax(cb_logits, dim=-1)
             cb_hidden = self._audio_decoder.embeddings(cb_token).unsqueeze(1)
             self._output_codes[:bs, cb_idx + 1] = cb_token
 
