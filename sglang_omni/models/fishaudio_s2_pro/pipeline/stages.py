@@ -272,7 +272,7 @@ def create_sglang_tts_engine_executor(
     max_new_tokens: int = 2048,
     top_k: int = 30,
     stream_stride: int = 5,
-    stream_followup_stride: int = 100,
+    stream_followup_stride: int = 10000,
     stream_vocoder_device: str | None = None,
 ) -> EngineExecutor:
     """Factory for the S2-Pro TTS engine stage."""
@@ -370,24 +370,31 @@ def create_vocoder_executor(
 ) -> PreprocessingExecutor:
     """Factory for the vocoder stage."""
     checkpoint_dir = _resolve_checkpoint(model_path)
-    codec = _load_codec(checkpoint_dir, device)
+    codec: Any | None = None
+
+    def _get_codec() -> Any:
+        nonlocal codec
+        if codec is None:
+            codec = _load_codec(checkpoint_dir, device)
+        return codec
 
     def _vocode(payload: StagePayload) -> StagePayload:
         state = load_state(payload)
         output_codes = state.output_codes
+        codec_model = _get_codec()
 
         codebook_codes = output_codes[1:].to(device)
 
         with torch.no_grad():
-            audio = codec.from_indices(codebook_codes[None])
+            audio = codec_model.from_indices(codebook_codes[None])
 
         audio_np = audio[0, 0].float().cpu()
         state.audio_samples = audio_np
-        state.sample_rate = codec.sample_rate
+        state.sample_rate = codec_model.sample_rate
         payload = store_state(payload, state)
 
         payload.data["audio_data"] = audio_np.tolist()
-        payload.data["sample_rate"] = codec.sample_rate
+        payload.data["sample_rate"] = codec_model.sample_rate
         payload.data["modality"] = "audio"
         if state.prompt_tokens or state.completion_tokens:
             usage = {
