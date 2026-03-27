@@ -49,6 +49,28 @@ def test_engine_executor_stream_skips_non_stream_requests() -> None:
     assert stream_calls == 0
 
 
+def test_engine_executor_stream_skips_truthy_non_bool_stream_flag() -> None:
+    async def _run() -> tuple[list[dict], int]:
+        engine = _FakeEngine()
+        executor = EngineExecutor(
+            engine=engine,
+            request_builder=lambda payload: payload.data,
+            stream_builder=lambda payload, item: {"ok": True},
+        )
+        request_id = "req-truthy-stream"
+        executor._payloads[request_id] = StagePayload(
+            request_id=request_id,
+            request=OmniRequest(inputs="hello", params={"stream": 1}),
+            data={},
+        )
+        chunks = [chunk async for chunk in executor.stream(request_id)]
+        return chunks, engine.stream_calls
+
+    chunks, stream_calls = asyncio.run(_run())
+    assert chunks == []
+    assert stream_calls == 0
+
+
 def test_engine_executor_stream_runs_for_stream_requests() -> None:
     class _EngineWithOneChunk(_FakeEngine):
         async def stream(self, request_id: str):

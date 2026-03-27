@@ -11,6 +11,7 @@ from typing import Any
 import torch
 
 from sglang_omni.executors import EngineExecutor, PreprocessingExecutor
+from sglang_omni.executors.engine_executor import is_stream_request_params
 from sglang_omni.models.fishaudio_s2_pro.io import S2ProState
 from sglang_omni.models.fishaudio_s2_pro.pipeline.engine_io import (
     apply_tts_result,
@@ -325,7 +326,6 @@ def create_sglang_tts_engine_executor(
         num_codebooks=num_codebooks,
         codebook_size=codebook_size,
         max_new_tokens=max_new_tokens,
-        top_k=top_k,
     )
 
     def _request_builder(payload: StagePayload):
@@ -344,7 +344,7 @@ def create_sglang_tts_engine_executor(
             return None
         # Note (Chenyang): Hot path optimization: skip expensive
         # GPU→CPU transfer for non-streaming requests.
-        if not payload.request.params.get("stream"):
+        if not is_stream_request_params(payload.request.params):
             return None
         return _maybe_build_incremental_audio_chunk(
             payload,

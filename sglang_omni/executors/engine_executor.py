@@ -13,6 +13,10 @@ from sglang_omni.executors.interface import Executor
 from sglang_omni.proto import StagePayload
 
 
+def is_stream_request_params(request_params: Any) -> bool:
+    return isinstance(request_params, dict) and request_params.get("stream") is True
+
+
 class EngineExecutor(Executor):
     """Wrap an Engine with worker-facing StagePayload I/O.
 
@@ -130,9 +134,7 @@ class EngineExecutor(Executor):
             return
         payload = self._payloads.get(request_id)
         request_params = payload.request.params if payload is not None else None
-        is_stream_request = isinstance(request_params, dict) and request_params.get(
-            "stream", False
-        )
+        is_stream_request = is_stream_request_params(request_params)
         if not is_stream_request:
             return
         async for item in stream_fn(request_id):
