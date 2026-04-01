@@ -29,6 +29,7 @@ _STREAM_CODES_KEY = "_stream_output_codes"
 _STREAM_EMITTED_SAMPLES_KEY = "_stream_emitted_samples"
 _STREAM_LAST_VOCODE_TOKENS_KEY = "_stream_last_vocode_tokens"
 _STREAM_NEXT_VOCODE_TOKENS_KEY = "_stream_next_vocode_tokens"
+_STREAM_LAST_CODES_LEN_KEY = "_stream_last_codes_len"
 
 
 def _resolve_checkpoint(checkpoint: str) -> str:
@@ -125,6 +126,8 @@ def _build_incremental_audio_chunk(
 
     total_tokens = sum(chunk.shape[1] for chunk in stream_codes)
     output_codes = torch.cat(stream_codes, dim=1)
+    # Collapse buffered chunks to one tensor to avoid unbounded list growth.
+    payload.data[_STREAM_CODES_KEY] = [output_codes]
     codebook_codes = output_codes[1:].to(device)
 
     with torch.no_grad():
@@ -163,8 +166,22 @@ def _maybe_build_incremental_audio_chunk(
 
     stream_codes: list[torch.Tensor] = payload.data.setdefault(_STREAM_CODES_KEY, [])
     # Keep step codes on device to avoid per-step CUDA sync from `.cpu()`.
-    # We only transfer once per emitted chunk inside _build_incremental_audio_chunk.
-    stream_codes.append(codes.detach())
+    # Clone to break aliasing with reused model output buffers across decode steps.
+    step_codes = codes.detach().clone()
+
+    # Handle cumulative snapshots defensively: if current step tensor grows in
+    # token length, keep only the unseen suffix; keep per-step deltas unchanged.
+    last_len = int(payload.data.get(_STREAM_LAST_CODES_LEN_KEY, 0))
+    curr_len = int(step_codes.shape[1])
+    if curr_len > last_len:
+        if last_len > 0 and curr_len > 1:
+            step_codes = step_codes[:, last_len:]
+        if curr_len > 1:
+            payload.data[_STREAM_LAST_CODES_LEN_KEY] = curr_len
+    elif curr_len > 1:
+        return None
+
+    stream_codes.append(step_codes)
 
     total_tokens = sum(chunk.shape[1] for chunk in stream_codes)
     next_vocode_tokens = int(
@@ -272,7 +289,7 @@ def create_sglang_tts_engine_executor(
     max_new_tokens: int = 2048,
     top_k: int = 30,
     stream_stride: int = 5,
-    stream_followup_stride: int = 10000,
+    stream_followup_stride: int = 100,
     stream_vocoder_device: str | None = None,
 ) -> EngineExecutor:
     """Factory for the S2-Pro TTS engine stage."""
